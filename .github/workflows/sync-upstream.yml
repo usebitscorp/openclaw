@@ -1,0 +1,120 @@
+name: Sync upstream releases
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: patches
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream tags
+        run: |
+          git remote add upstream https://github.com/openclaw/openclaw.git || true
+          git fetch upstream --tags
+
+      - name: Find latest stable upstream tag
+        id: upstream
+        run: |
+          LATEST=$(git tag -l 'v2*' --sort=-v:refname | grep -v 'beta\|rc\|alpha' | head -1)
+          echo "tag=$LATEST" >> "$GITHUB_OUTPUT"
+          VERSION="${LATEST#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Latest upstream: $LATEST ($VERSION)"
+
+      - name: Check if already synced
+        id: check
+        run: |
+          TAG="${{ steps.upstream.outputs.tag }}"
+          CURRENT=$(node -p "require('./package.json').version.split('-')[0]")
+          echo "Current version: $CURRENT"
+
+          EXISTING=$(gh pr list --head "sync/upstream-${TAG}" --json number --jq 'length' 2>/dev/null || echo "0")
+          if [ "$EXISTING" != "0" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "PR already exists for $TAG"
+          elif [ "${{ steps.upstream.outputs.version }}" = "$CURRENT" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Already on $CURRENT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build sync branch
+        if: steps.check.outputs.skip != 'true'
+        id: sync
+        run: |
+          TAG="${{ steps.upstream.outputs.tag }}"
+          VERSION="${{ steps.upstream.outputs.version }}"
+          BRANCH="sync/upstream-${TAG}"
+
+          # Save our fork files from patches branch
+          cp .github/workflows/publish.yml /tmp/publish.yml
+          cp .github/workflows/sync-upstream.yml /tmp/sync-upstream.yml
+          cp FORK.md /tmp/FORK.md 2>/dev/null || true
+
+          # Start fresh from the upstream tag
+          git checkout -b "$BRANCH" "$TAG"
+
+          # Re-apply our fork customizations
+          mkdir -p .github/workflows
+          cp /tmp/publish.yml .github/workflows/publish.yml
+          cp /tmp/sync-upstream.yml .github/workflows/sync-upstream.yml
+          cp /tmp/FORK.md FORK.md 2>/dev/null || true
+
+          # Patch package.json: name, repository, publishConfig
+          node -e "
+            const pkg = require('./package.json');
+            pkg.name = '@klausai/openclaw';
+            pkg.repository = { type: 'git', url: 'git+https://github.com/usebitscorp/openclaw.git' };
+            pkg.publishConfig = { access: 'public' };
+            require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+            console.log('Patched package.json: version=' + pkg.version);
+          "
+
+          git add -A
+          git commit -m "chore: apply @klausai/openclaw fork patches on ${TAG}"
+
+          git push origin "$BRANCH" --force
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Create PR
+        if: steps.sync.outputs.branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.upstream.outputs.tag }}"
+          BRANCH="${{ steps.sync.outputs.branch }}"
+          gh pr create \
+            --base patches \
+            --head "$BRANCH" \
+            --title "Sync upstream $TAG" \
+            --body "$(cat <<EOF
+          Updates fork to upstream \`$TAG\`.
+
+          Our patches (package rename, CI workflows) are re-applied on top.
+
+          After merging, tag to publish:
+          \`\`\`
+          git pull origin patches
+          git tag ${TAG}-klausai.1
+          git push origin ${TAG}-klausai.1
+          \`\`\`
+          EOF
+          )"

@@ -1,5 +1,5 @@
 {
-  "name": "openclaw",
+  "name": "@klausai/openclaw",
   "version": "2026.3.24",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
@@ -11,7 +11,7 @@
   "author": "",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/openclaw/openclaw.git"
+    "url": "git+https://github.com/usebitscorp/openclaw.git"
   },
   "bin": {
     "openclaw": "openclaw.mjs"
@@ -575,6 +575,9 @@
     },
     "./extension-api": "./dist/extensionAPI.js",
     "./cli-entry": "./openclaw.mjs"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "android:assemble": "cd apps/android && ./gradlew :app:assemblePlayDebug",

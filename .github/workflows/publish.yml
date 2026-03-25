@@ -43,9 +43,19 @@ jobs:
             exit 1
           fi
 
+      - name: Determine npm tag
+        id: tag
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if echo "$VERSION" | grep -q '-'; then
+            echo "tag=next" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish to npm
         if: ${{ github.event.inputs.dry_run != 'true' }}
-        run: npm publish --provenance --access public
+        run: npm publish --provenance --access public --tag ${{ steps.tag.outputs.tag }}
 
       - name: Publish (dry run)
         if: ${{ github.event.inputs.dry_run == 'true' }}

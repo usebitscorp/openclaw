@@ -26,7 +26,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
           registry-url: 'https://registry.npmjs.org'
 
       - name: Install dependencies
@@ -42,10 +42,6 @@ jobs:
             echo "ERROR: package name is '$NAME', expected '@klausai/openclaw'"
             exit 1
           fi
-
-      - name: Configure npm for OIDC
-        run: |
-          echo "//registry.npmjs.org/:_authToken=" > "$NPM_CONFIG_USERCONFIG"
 
       - name: Publish to npm
         if: ${{ github.event.inputs.dry_run != 'true' }}

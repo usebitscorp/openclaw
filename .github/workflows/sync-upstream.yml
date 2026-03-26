@@ -1,0 +1,77 @@
+name: Sync upstream releases
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream tags
+        run: |
+          git remote add upstream https://github.com/openclaw/openclaw.git || true
+          git fetch upstream --tags
+
+      - name: Find latest stable upstream tag
+        id: upstream
+        run: |
+          LATEST=$(git tag -l 'v2*' --sort=-v:refname | grep -v 'beta\|rc\|alpha' | head -1)
+          echo "tag=$LATEST" >> "$GITHUB_OUTPUT"
+          echo "Latest upstream: $LATEST"
+
+      - name: Check if already synced
+        id: check
+        run: |
+          TAG="${{ steps.upstream.outputs.tag }}"
+          if git merge-base --is-ancestor "$TAG" HEAD 2>/dev/null; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Already includes $TAG"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Rebase onto upstream tag
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          TAG="${{ steps.upstream.outputs.tag }}"
+
+          git rebase "$TAG"
+
+          # Ensure package.json fork patches are applied
+          node -e "
+            const pkg = require('./package.json');
+            let changed = false;
+            if (pkg.name !== '@klausai/openclaw') { pkg.name = '@klausai/openclaw'; changed = true; }
+            const repo = { type: 'git', url: 'git+https://github.com/usebitscorp/openclaw.git' };
+            if (JSON.stringify(pkg.repository) !== JSON.stringify(repo)) { pkg.repository = repo; changed = true; }
+            if (pkg.publishConfig?.access !== 'public') { pkg.publishConfig = { access: 'public' }; changed = true; }
+            if (changed) {
+              require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+              console.log('Patched package.json');
+            } else {
+              console.log('package.json already patched');
+            }
+          "
+
+          git add -A
+          git diff --cached --quiet || git commit -m "chore: apply @klausai/openclaw fork patches"
+
+          git push origin main --force-with-lease
+          git tag "${TAG}-klausai.1"
+          git push origin "${TAG}-klausai.1"
+
+          echo "Synced to ${TAG}"

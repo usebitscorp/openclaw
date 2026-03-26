@@ -1,0 +1,62 @@
+name: Publish @klausai/openclaw
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (skip npm publish)'
+        required: false
+        default: 'false'
+        type: boolean
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build && pnpm ui:build
+
+      - name: Verify package name
+        run: |
+          NAME=$(node -p "require('./package.json').name")
+          if [ "$NAME" != "@klausai/openclaw" ]; then
+            echo "ERROR: package name is '$NAME', expected '@klausai/openclaw'"
+            exit 1
+          fi
+
+      - name: Determine npm tag
+        id: tag
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if echo "$VERSION" | grep -q '-'; then
+            echo "tag=next" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to npm
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: npm publish --provenance --access public --tag ${{ steps.tag.outputs.tag }}
+
+      - name: Publish (dry run)
+        if: ${{ github.event.inputs.dry_run == 'true' }}
+        run: npm publish --dry-run
